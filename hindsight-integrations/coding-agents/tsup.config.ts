@@ -25,6 +25,9 @@ export default defineConfig({
     // Prime Agent loads this module as an extension (default export) by absolute path from its
     // settings.json `extensions` array, so it must be self-contained like the hook bins.
     "prime-agent": "src/prime-agent.ts",
+    "kimi-hook": "src/kimi-hook.ts",
+    "kimi-sessionstart-hook": "src/kimi-sessionstart-hook.ts",
+    "kimi-stop-hook": "src/kimi-stop-hook.ts",
     "qwen-hook": "src/qwen-hook.ts",
     "qwen-sessionstart-hook": "src/qwen-sessionstart-hook.ts",
     "qwen-stop-hook": "src/qwen-stop-hook.ts",

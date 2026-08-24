@@ -169,6 +169,12 @@ function mergeHarnessHooks(
   dist: string
 ): void {
   const spec = HOOK_HARNESSES[harness];
+  // A harness whose hooks live outside the two JSON shapes must never reach the generic
+  // writer: the ternary below would silently take the FLAT branch and emit a JSON block
+  // into a file that host never reads. tsc cannot catch that, so fail loudly here.
+  if (spec.configStyle === "toml-array")
+    throw new Error(`${harness} writes its own TOML hook block; mergeHarnessHooks cannot emit it`);
+
   const installedEvents = new Set<string>();
   for (const hook of Object.values(spec.install)) {
     // Antigravity has no SessionStart event. Its first PreInvocation performs the same seed guard,

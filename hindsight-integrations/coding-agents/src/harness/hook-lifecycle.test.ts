@@ -9,6 +9,7 @@ const HOOK_HARNESS_NAMES: HookHarnessName[] = [
   "copilot-cli",
   "grok-build",
   "qwen-code",
+  "kimi-code",
 ];
 
 describe("HOOK_HARNESSES lifecycle contract", () => {

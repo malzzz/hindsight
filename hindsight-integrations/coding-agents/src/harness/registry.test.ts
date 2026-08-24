@@ -18,9 +18,10 @@ describe("HARNESS_NAMES", () => {
         "copilot-cli",
         "grok-build",
         "qwen-code",
+        "kimi-code",
       ])
     );
-    expect(HARNESS_NAMES).toHaveLength(13);
+    expect(HARNESS_NAMES).toHaveLength(14);
   });
 });
 
