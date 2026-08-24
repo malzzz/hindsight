@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { rmSync } from "node:fs";
+import { sessionCacheFile } from "./session-cache";
 import { resolveConfig } from "./config";
 import type { HindsightClient } from "./hindsight";
 import { RuntimeCore } from "./runtime";
@@ -13,19 +15,26 @@ vi.mock("./daemon", async (importOriginal) => ({
 
 describe("RuntimeCore", () => {
   it("uses the shared prompt lifecycle and consumes the new-bank reflect deferral once", async () => {
+    // mergeSessionCache preserves a resumed session's state by design — so this test must not
+    // inherit a cache file from a previous test run (the old replace-write masked that).
+    rmSync(sessionCacheFile("opencode", "runtime-shared-lifecycle"), { force: true });
     const client = {
       listDocumentIds: vi.fn(async () => new Set(["git:existing"])),
       listPages: vi.fn(async () => ({ items: [] })),
-      reflect: vi.fn(async () => "shared reflect"),
+      reflectWithProvenance: vi.fn(async () => ({
+        text: "shared reflect",
+        memories: [],
+        mentalModelIds: [],
+      })),
     } as unknown as HindsightClient;
     const runtime = new RuntimeCore(client, "bank-1", resolveConfig({}));
 
     await runtime.seedIfCold("/definitely-not-a-git-repository");
     await runtime.onPrompt("runtime-shared-lifecycle", "first prompt");
-    expect(client.reflect).not.toHaveBeenCalled();
+    expect(client.reflectWithProvenance).not.toHaveBeenCalled();
 
     await runtime.onPrompt("runtime-shared-lifecycle", "second prompt");
-    expect(client.reflect).toHaveBeenCalledTimes(1);
+    expect(client.reflectWithProvenance).toHaveBeenCalledTimes(1);
     expect(runtime.getInjection("runtime-shared-lifecycle")).toContain("shared reflect");
   });
 });

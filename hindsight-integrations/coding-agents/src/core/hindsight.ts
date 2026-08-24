@@ -470,6 +470,26 @@ export class HindsightClient {
     query: string,
     opts: { budget?: string; timeoutMs: number; maxTokens?: number }
   ): Promise<string> {
+    return (await this.reflectWithProvenance(query, opts)).text;
+  }
+
+  /**
+   * Reflect with `include.facts`: the response carries based_on — the
+   * retrieval PROVENANCE the synthesis was built from (never evidence the
+   * downstream agent used it; that is the attribution signal in utility.ts).
+   * On the deployed 0.8.4 server the memories list is query-dependent:
+   * empty when reflect ends via forced synthesis, populated on the done
+   * path (both observed live 2026-08-24) — callers must treat missing
+   * memory provenance as "server did not say", not "nothing was drawn on".
+   */
+  async reflectWithProvenance(
+    query: string,
+    opts: { budget?: string; timeoutMs: number; maxTokens?: number }
+  ): Promise<{
+    text: string;
+    memories: { id: string | null; type?: string; textHead?: string }[];
+    mentalModelIds: string[];
+  }> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
     try {
@@ -482,12 +502,30 @@ export class HindsightClient {
           // rewrite the forced-synthesis path skips) — send it anyway: it bounds the paths
           // that do honor it and documents intent on the wire.
           ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
+          include: { facts: {} },
         }),
         signal: ctrl.signal,
       });
       if (!resp.ok) throw new Error(`reflect ${resp.status}${this.authHint(resp.status)}`);
-      const data = (await resp.json()) as { text?: string };
-      return (data.text || "").trim();
+      const data = (await resp.json()) as {
+        text?: string;
+        based_on?: {
+          memories?: { id?: string | null; type?: string; text?: string }[];
+          mental_models?: { id?: string }[];
+        } | null;
+      };
+      const basedOn = data.based_on ?? undefined;
+      return {
+        text: (data.text || "").trim(),
+        memories: (basedOn?.memories ?? []).map((m) => ({
+          id: m.id ?? null,
+          ...(m.type ? { type: m.type } : {}),
+          ...(m.text ? { textHead: m.text.slice(0, 120) } : {}),
+        })),
+        mentalModelIds: (basedOn?.mental_models ?? [])
+          .map((m) => m.id)
+          .filter((x): x is string => !!x),
+      };
     } finally {
       clearTimeout(timer);
     }

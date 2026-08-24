@@ -31,11 +31,16 @@ import { deriveBankId } from "./bank";
 import { brandWord } from "./brand";
 import { diag } from "./diag";
 import { setLogLevel } from "./log";
-import { parsePageList, buildKnowledgePreamble, rosterHash, type PageRef } from "./knowledge-injection";
+import {
+  parsePageList,
+  buildKnowledgePreamble,
+  rosterHash,
+  type PageRef,
+} from "./knowledge-injection";
 import type { ClientOpts, RetainOpts } from "./hindsight";
 import { buildRetainStamp } from "./retain-stamp";
 import { HindsightClient } from "./hindsight";
-import { sessionCacheFile, sessionRootDir, writeSessionCache } from "./session-cache";
+import { mergeSessionCache, sessionCacheFile, sessionRootDir } from "./session-cache";
 
 /** Minimal client shape `buildSessionStartContext` needs. */
 interface SeedContextClient {
@@ -381,14 +386,24 @@ export async function runSessionStartHook(
     });
 
     const out = await buildSessionStartContext({ cwd, sessionRoot, bankId, cfg, client, harness });
-    if (sessionId && (out.deferInitialReflect || out.rosterHash !== undefined)) {
-      writeSessionCache(sessionCacheFile(harness, sessionId), {
-        ...(out.deferInitialReflect ? { deferInitialReflect: true } : {}),
-        ...(out.rosterHash !== undefined ? { rosterHash: out.rosterHash } : {}),
-      });
-    }
     // The lifecycle computes one host-neutral output; the registry owns each host's wire schema.
     const payload = spec.emit(out);
+    // rosterHash means "the roster the agent SAW" — only seed it when this harness's SessionStart
+    // can actually deliver context (kimi/antigravity emit {}: nothing reaches the model, and a
+    // seeded hash would suppress the cadence refresh that is their ONLY guide channel). MERGE, not
+    // replace: SessionStart re-fires on resume/clear/compact with the same session id, and a
+    // whole-file write here would wipe turns/reflectAnswer and re-run the once-per-session reflect.
+    const delivered =
+      out.additionalContext !== undefined &&
+      payload !== null &&
+      typeof payload === "object" &&
+      Object.keys(payload as object).length > 0;
+    if (sessionId && (out.deferInitialReflect || (delivered && out.rosterHash !== undefined))) {
+      mergeSessionCache(sessionCacheFile(harness, sessionId), {
+        ...(out.deferInitialReflect ? { deferInitialReflect: true } : {}),
+        ...(delivered && out.rosterHash !== undefined ? { rosterHash: out.rosterHash } : {}),
+      });
+    }
     if (out.systemMessage || out.additionalContext) {
       process.stdout.write(JSON.stringify(payload));
     }

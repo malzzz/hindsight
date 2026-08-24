@@ -87,6 +87,9 @@ export interface ToolGuideOpts {
    *  the agent straight to hindsight_reflect; it now goes to the knowledge pages first and keeps
    *  reflect for what they don't cover. The field name is unchanged so call sites stay stable. */
   reflectOnNewGoals?: boolean;
+  /** First refresh of a session whose agent verifiably saw no roster (no SessionStart delivery):
+   *  carry the FULL tool guide — for kimi/antigravity this refresh is the only guide channel. */
+  fullGuide?: boolean;
 }
 
 function toolGuide(opts?: ToolGuideOpts): string {
@@ -124,14 +127,12 @@ export function buildRosterRefresh(pages: PageRef[], opts?: ToolGuideOpts): stri
   const rosterBlock = pages.length
     ? `Knowledge pages changed — current list:\n${roster(pages)}\n`
     : "";
-  return (
-    "<hindsight_knowledge_refresh>\n" +
-    rosterBlock +
-    (opts?.reflectOnNewGoals ? PAGES_FIRST_ON_GOALS : "") +
-    "Reminder: the Hindsight tools introduced at session start are still available — " +
-    "hindsight_search_knowledge_pages remains the first stop for anything this project's " +
-    "accumulated knowledge might answer; the full when-to-call guide from session start is " +
-    "unchanged.\n" +
-    "</hindsight_knowledge_refresh>"
-  );
+  const guide = opts?.fullGuide
+    ? `This repository has Hindsight memory tools registered; call them at the right moments:\n${toolGuide(opts)}\n`
+    : (opts?.reflectOnNewGoals ? PAGES_FIRST_ON_GOALS : "") +
+      "Reminder: the Hindsight tools introduced at session start are still available — " +
+      "hindsight_search_knowledge_pages remains the first stop for anything this project's " +
+      "accumulated knowledge might answer; the full when-to-call guide from session start is " +
+      "unchanged.\n";
+  return "<hindsight_knowledge_refresh>\n" + rosterBlock + guide + "</hindsight_knowledge_refresh>";
 }

@@ -148,3 +148,15 @@ export function fileCursorStore(harness: string): RetainCursorStore {
     },
   };
 }
+
+/**
+ * Read-merge-write for PARTIAL updates. writeSessionCache is a whole-file
+ * REPLACE — correct for hook.ts's complete per-turn state, but a partial
+ * writer (SessionStart seeding rosterHash, runtime transferring
+ * deferInitialReflect) would clobber turns/reflectAnswer/pages on a
+ * SessionStart re-fire (resume/clear/compact reuse the session id), which
+ * re-runs the once-per-session reflect mid-session.
+ */
+export function mergeSessionCache(cacheFile: string, patch: Partial<SessionCache>): void {
+  writeSessionCache(cacheFile, { ...readSessionCache(cacheFile), ...patch });
+}

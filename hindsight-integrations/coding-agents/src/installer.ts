@@ -22,6 +22,7 @@
  * missing. Backups: the first time we touch an existing file we write `<file>.hindsight-backup`.
  */
 import { execFileSync } from "node:child_process";
+import { computeScores, renderUtilityReport } from "./core/utility";
 import {
   copyFileSync,
   cpSync,
@@ -1425,10 +1426,19 @@ export function run(argv: string[], ctxIn: InstallCtx): number {
   // why installing from a cache used to be refused outright. Copying the runtime somewhere stable
   // first removes the problem instead of pushing it onto the user: `npx` now works, and nobody has
   // to keep a global install of a tool whose only job is to set other tools up.
+  if (command === "utility") {
+    const bank = names[0];
+    if (!bank) {
+      ctx.log?.("usage: hindsight-coding-agents utility <bank>");
+      return 1;
+    }
+    ctx.log?.(renderUtilityReport(computeScores(bank)));
+    return 0;
+  }
   if (command === "install") ctx = stageRuntime(ctx);
   if (command !== "install" && command !== "uninstall") {
     ctx.log?.(
-      `usage: hindsight-coding-agents <install|uninstall> <all|harness...>\n` +
+      `usage: hindsight-coding-agents <install|uninstall|utility> <all|harness...|bank>\n` +
         `       [--server cloud|self-hosted|daemon] [--api-url <url>] [--api-token <token>]\n` +
         `       [--import-conversations]\n` +
         `  all      every agent detected on this machine\n` +

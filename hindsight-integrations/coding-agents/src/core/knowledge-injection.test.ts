@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parsePageList, buildKnowledgePreamble, buildRosterRefresh, rosterHash } from "./knowledge-injection";
+import {
+  parsePageList,
+  buildKnowledgePreamble,
+  buildRosterRefresh,
+  rosterHash,
+} from "./knowledge-injection";
 
 describe("parsePageList", () => {
   it("extracts {id,title} from the page list shape, tolerating junk", () => {
@@ -79,6 +84,14 @@ describe("buildRosterRefresh", () => {
     expect(out).not.toContain("hindsight_ingest_document");
     expect(out.length).toBeLessThan(800);
   });
+  it("fullGuide refresh carries the complete tool guide for harnesses with no SessionStart channel", () => {
+    const out = buildRosterRefresh([{ id: "p1", title: "Component map" }], { fullGuide: true });
+    expect(out).toContain("<hindsight_knowledge_refresh>");
+    expect(out).toContain("hindsight_capture_initiative");
+    expect(out).toContain("hindsight_ingest_document");
+    expect(out).toContain("Component map (p1)");
+  });
+
   it("no pages: still a valid compact reminder, no roster block", () => {
     const out = buildRosterRefresh([]);
     expect(out).toContain("<hindsight_knowledge_refresh>");
@@ -92,19 +105,31 @@ describe("page descriptions and roster identity", () => {
   it("parsePageList keeps the description that makes a roster entry selectable", () => {
     const raw = {
       items: [
-        { id: "p1", name: "Component map", description: "Where each service lives and what talks to what" },
+        {
+          id: "p1",
+          name: "Component map",
+          description: "Where each service lives and what talks to what",
+        },
         { id: "p2", name: "Core concepts" },
       ],
     };
     expect(parsePageList(raw)).toEqual([
-      { id: "p1", title: "Component map", description: "Where each service lives and what talks to what" },
+      {
+        id: "p1",
+        title: "Component map",
+        description: "Where each service lives and what talks to what",
+      },
       { id: "p2", title: "Core concepts" },
     ]);
   });
 
   it("roster lines carry the description, clipped and whitespace-collapsed", () => {
     const out = buildKnowledgePreamble([
-      { id: "p1", title: "Component map", description: "  spans\nmultiple   lines " + "x".repeat(200) },
+      {
+        id: "p1",
+        title: "Component map",
+        description: "  spans\nmultiple   lines " + "x".repeat(200),
+      },
     ]);
     expect(out).toContain("Component map (p1) — spans multiple lines");
     expect(out).toContain("…");

@@ -114,8 +114,19 @@ as `HINDSIGHT_MAX_PARALLEL_RETAINS` for containers and CI.
 
 `HINDSIGHT_CONFIG` moves the file itself — point it at another path for a container or a test
 harness where `$HOME` is not the right anchor. It is still exactly one file; only its location
-changes. (The other variables that are not settings are `HINDSIGHT_LOG_FILE`, `HINDSIGHT_DIAG_FILE`
-and `HINDSIGHT_LOG_LEVEL` — see [Diagnostics & logging](#diagnostics--logging).)
+changes. (The other variables that are not settings are `HINDSIGHT_LOG_FILE`, `HINDSIGHT_DIAG_FILE`,
+`HINDSIGHT_LOG_LEVEL` — see [Diagnostics & logging](#diagnostics--logging) — and
+`HINDSIGHT_UTILITY_DIR`, which overrides where the memory-utility flywheel writes its bank-scoped
+event files, default `~/.hindsight/utility/`.)
+
+### Memory-utility flywheel
+
+Every automatic reflect records an `injected` event (what synthesis entered context and, when the
+server supplies `based_on`, which memories/mental models it was built from), and every retained
+transcript records `used` events (the agent's visible "🧠 From Hindsight memory" attributions).
+`hindsight-coding-agents utility <bank>` prints the report: session-level inject→used rates and
+per-memory injected/used-after counts. Injected = retrieval provenance; used = visible attribution —
+the two are never conflated.
 
 ### When a change takes effect
 

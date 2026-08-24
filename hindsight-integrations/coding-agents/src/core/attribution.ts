@@ -1,6 +1,9 @@
-/** Shared visible-attribution directive — the PROVEN, battle-tested wording ported verbatim from the
- *  v1 Claude Code plugin's `recallPromptPreamble` (which reliably makes the agent surface the header).
- *  Reused by both the reflect injection (inject.ts) and per-turn recall formatting (recall.ts). */
+/** LEGACY visible-attribution directive from the v1 Claude Code plugin's `recallPromptPreamble`.
+ *  NOT the live convention and currently has zero importers: the shipped wording is
+ *  "> 🧠 **From Hindsight memory** — ..." (taught in inject.ts / knowledge-injection.ts /
+ *  knowledge-tools.ts and PARSED by utility.ts's ATTRIBUTION_RE for the usage flywheel).
+ *  Reviving this rival header would make every attribution invisible to that parser — align
+ *  utility.ts first if this wording ever comes back. */
 export const ATTRIBUTION_PREAMBLE = `VISIBLE ATTRIBUTION — SHOW HINDSIGHT WORKING:
 The goal of this attribution header is for the user to SEE Hindsight contributing value in their sessions. Be generous about when to emit it. Whenever recalled memories are RELEVANT to the answer you're about to give — whether they directly drove your reasoning, supplied background context, reinforced a conclusion, or saved you from having to ask a question — surface them with this exact markdown header at the top of the relevant section:
 

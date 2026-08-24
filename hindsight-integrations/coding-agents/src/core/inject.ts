@@ -46,10 +46,15 @@ export function isTrivialPrompt(prompt: string): boolean {
   // Only near-empty prompts are gated on length alone: a short-but-real goal ("fix the tests")
   // is exactly the kind of prompt the bank may know something about.
   if (p.length < 12) return true;
-  if (/^(reply with|say|echo|print|type|output|respond with)\b/i.test(p)) return true;
+  // Length-capped like the ack branch: "Output a summary of what changed in the last release"
+  // is a real goal, "Reply with exactly: migration-verified" is not.
+  if (p.length < 48 && /^(reply with|say|echo|print|type|output|respond with)\b/i.test(p))
+    return true;
   if (
     p.length < 48 &&
-    /^(yes|no|ok|okay|sure|thanks|thank you|continue|go ahead|do it|proceed|lgtm|sounds good)\b/i.test(p)
+    /^(yes|no|ok|okay|sure|thanks|thank you|continue|go ahead|do it|proceed|lgtm|sounds good)\b/i.test(
+      p
+    )
   ) {
     return true;
   }

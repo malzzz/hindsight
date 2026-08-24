@@ -61,6 +61,8 @@ export interface RetainHookSpec {
 interface RetainClient {
   retain: HindsightClient["retain"];
   supportsIdempotentRetain: HindsightClient["supportsIdempotentRetain"];
+  /** Utility flywheel: retainLiveSession records used-attributions under client.bank */
+  bank: HindsightClient["bank"];
 }
 
 /**

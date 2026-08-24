@@ -25,7 +25,7 @@ import { memoryCursorStore } from "./retain-cursor";
 import { buildRetainStamp } from "./retain-stamp";
 import { buildSessionStartContext } from "./session-start";
 import { buildHookOutput } from "./hook";
-import { sessionCacheFile, writeSessionCache } from "./session-cache";
+import { mergeSessionCache, sessionCacheFile } from "./session-cache";
 
 const HARNESS = "opencode";
 
@@ -151,7 +151,7 @@ export class RuntimeCore {
       // `seedIfCold` has no session id. Transfer its SessionStart decision to the first concrete
       // session here; `buildHookOutput` consumes it exactly once, like hook harnesses do.
       this.deferInitialReflect = false;
-      writeSessionCache(cacheFile, { deferInitialReflect: true });
+      mergeSessionCache(cacheFile, { deferInitialReflect: true });
     }
     const output = await buildHookOutput({
       harness: this.harness,
@@ -159,6 +159,8 @@ export class RuntimeCore {
       cfg: this.cfg,
       client: this.client,
       cacheFile,
+      bankId: this.bankId,
+      sessionId,
     });
 
     const blocks: string[] = [];

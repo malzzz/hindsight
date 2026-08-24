@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfig } from "./config";
 import { buildHookOutput, runHook } from "./hook";
+import { writeSessionCache } from "./session-cache";
+import { rosterHash } from "./knowledge-injection";
+import { isTrivialPrompt } from "./inject";
 import { diagFilePath } from "./diag";
 import { buildReflectQuery } from "./inject";
 
@@ -38,13 +41,24 @@ const UNRELATED_PROMPT = "completely unrelated banana smoothie question";
 
 function makeClient(
   overrides: Partial<{
-    reflect: (query: string, opts: { budget?: string; timeoutMs: number }) => Promise<string>;
+    reflectWithProvenance: (
+      query: string,
+      opts: { budget?: string; timeoutMs: number; maxTokens?: number }
+    ) => Promise<{
+      text: string;
+      memories: { id: string | null; type?: string; textHead?: string }[];
+      mentalModelIds: string[];
+    }>;
     listPages: () => Promise<unknown>;
     getPage: (pageId: string) => Promise<unknown>;
   }> = {}
 ) {
   return {
-    reflect: vi.fn(async () => "REFLECT_ANSWER"),
+    reflectWithProvenance: vi.fn(async () => ({
+      text: "REFLECT_ANSWER",
+      memories: [],
+      mentalModelIds: [],
+    })),
     listPages: vi.fn(async () => ({ items: [{ id: "p1", name: "Uploader guide" }] })),
     getPage: vi.fn(async () => ({ content: PAGE_CONTENT })),
     ...overrides,
@@ -87,7 +101,7 @@ describe("buildHookOutput", () => {
       client,
       cacheFile,
     });
-    expect(client.reflect).toHaveBeenCalledTimes(1);
+    expect(client.reflectWithProvenance).toHaveBeenCalledTimes(1);
     // Injected ONCE (hook context persists in the transcript — stacking it every turn would
     // duplicate the same block); turn 2 carries no repeat.
     expect(t1.context).toContain("REFLECT_ANSWER");
@@ -108,7 +122,7 @@ describe("buildHookOutput", () => {
       client,
       cacheFile,
     });
-    expect(client.reflect).not.toHaveBeenCalled();
+    expect(client.reflectWithProvenance).not.toHaveBeenCalled();
     expect(first.context).toBeUndefined();
     expect(JSON.parse(readFileSync(cacheFile, "utf8")).deferInitialReflect).toBeUndefined();
 
@@ -119,14 +133,14 @@ describe("buildHookOutput", () => {
       client,
       cacheFile,
     });
-    expect(client.reflect).toHaveBeenCalledTimes(1);
+    expect(client.reflectWithProvenance).toHaveBeenCalledTimes(1);
     expect(second.context).toContain("REFLECT_ANSWER");
   });
 
   it("reflect rejection: caches '' (no retry next turn), no throw, no context at all", async () => {
     const cfg = resolveConfig({});
     const client = makeClient({
-      reflect: vi.fn(async () => {
+      reflectWithProvenance: vi.fn(async () => {
         throw new Error("reflect boom");
       }),
     });
@@ -152,13 +166,13 @@ describe("buildHookOutput", () => {
       cacheFile,
     });
     // The failure is cached as "" — reflect is NOT retried on the next turn.
-    expect(client.reflect).toHaveBeenCalledTimes(1);
+    expect(client.reflectWithProvenance).toHaveBeenCalledTimes(1);
   });
 
   it("the notice fires ONCE — the turn reflect failed, not on later turns", async () => {
     const cfg = resolveConfig({});
     const client = makeClient({
-      reflect: vi.fn(async () => {
+      reflectWithProvenance: vi.fn(async () => {
         throw new Error("reflect boom");
       }),
     });
@@ -171,7 +185,9 @@ describe("buildHookOutput", () => {
   it("an EMPTY answer is not a failure: no notice (reflect simply had nothing to say)", async () => {
     const cfg = resolveConfig({});
     // The real client returns (data.text || "").trim() — a 200 with no text yields "".
-    const client = makeClient({ reflect: vi.fn(async () => "") });
+    const client = makeClient({
+      reflectWithProvenance: vi.fn(async () => ({ text: "", memories: [], mentalModelIds: [] })),
+    });
     const result = await buildHookOutput({
       harness: "claude-code",
       prompt: UNRELATED_PROMPT,
@@ -193,11 +209,14 @@ describe("buildHookOutput", () => {
       client,
       cacheFile,
     });
-    expect(client.reflect).toHaveBeenCalledWith(buildReflectQuery("investigate the flaky uploader test failures"), {
-      budget: "low",
-      timeoutMs: 25000,
-      maxTokens: 1200,
-    });
+    expect(client.reflectWithProvenance).toHaveBeenCalledWith(
+      buildReflectQuery("investigate the flaky uploader test failures"),
+      {
+        budget: "low",
+        timeoutMs: 25000,
+        maxTokens: 1200,
+      }
+    );
   });
 
   it("uses the configured reflect timeout when it is below the 25s cap", async () => {
@@ -210,11 +229,14 @@ describe("buildHookOutput", () => {
       client,
       cacheFile,
     });
-    expect(client.reflect).toHaveBeenCalledWith(buildReflectQuery("investigate the flaky uploader test failures"), {
-      budget: "low",
-      timeoutMs: 5000,
-      maxTokens: 1200,
-    });
+    expect(client.reflectWithProvenance).toHaveBeenCalledWith(
+      buildReflectQuery("investigate the flaky uploader test failures"),
+      {
+        budget: "low",
+        timeoutMs: 5000,
+        maxTokens: 1200,
+      }
+    );
   });
 
   it("autoReflect false: never calls reflect, injects no memory block", async () => {
@@ -227,11 +249,13 @@ describe("buildHookOutput", () => {
       client,
       cacheFile,
     });
-    expect(client.reflect).not.toHaveBeenCalled();
+    expect(client.reflectWithProvenance).not.toHaveBeenCalled();
     expect(out.context ?? "").not.toContain("<hindsight_memory>");
-    // Tool-only mode's pull trigger: the roster refresh must carry the pages-first rule.
-    // Since 2026-08-24 the refresh is roster-delta gated, so the roster must change first.
-    client.listPages.mockResolvedValue({ items: [{ id: "p9", name: "New page" }] });
+    // Tool-only mode's pull trigger: with no seeded hash the first cadence refresh emits the
+    // FULL guide, which carries the pages-first rule.
+    (client.listPages as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [{ id: "p9", name: "New page" }],
+    });
     const cfg2 = resolveConfig({ autoReflect: false, pageRefreshEveryTurns: 1 });
     const out2 = await buildHookOutput({
       harness: "claude-code",
@@ -301,33 +325,55 @@ describe("buildHookOutput", () => {
     expect(result.context).not.toContain("hindsight_read_knowledge_page");
   });
 
-  it("injects the roster refresh on cadence turns ONLY when the roster changed", async () => {
+  it("first cadence turn with NO seeded roster hash emits the FULL guide (kimi/antigravity channel)", async () => {
+    // Those harnesses' SessionStart emits {} — the cadence refresh is their only guide channel.
     const cfg = resolveConfig({ pageRefreshEveryTurns: 2 });
     const client = makeClient();
-    const call = (prompt: string = UNRELATED_PROMPT) =>
-      buildHookOutput({ harness: "claude-code", prompt, cfg, client, cacheFile });
-
-    const t1 = await call(); // fetches the roster, seeds its hash
-    expect(t1.context ?? "").not.toContain("hindsight_knowledge_refresh");
-    // turn 2 is a cadence turn but the roster is unchanged — suppressed (the whole point:
-    // an unchanged roster re-injected on the bare cadence measured ~527 duplicate tokens).
+    const call = () =>
+      buildHookOutput({ harness: "claude-code", prompt: UNRELATED_PROMPT, cfg, client, cacheFile });
+    const t1 = await call();
+    expect(t1.context ?? "").not.toContain("hindsight_knowledge_refresh"); // not a cadence turn
     const t2 = await call();
+    expect(t2.context).toContain("<hindsight_knowledge_refresh>");
+    expect(t2.context).toContain("hindsight_capture_initiative"); // FULL guide, not the reminder
+    expect(t2.context).toContain("Uploader guide (p1)");
+  });
+
+  it("with a SessionStart-seeded hash, the refresh is suppressed until the roster changes", async () => {
+    const cfg = resolveConfig({ pageRefreshEveryTurns: 2 });
+    const client = makeClient();
+    // simulate SessionStart having delivered the roster
+    writeSessionCache(cacheFile, {
+      rosterHash: rosterHash([{ id: "p1", title: "Uploader guide" }]),
+    });
+    const call = () =>
+      buildHookOutput({ harness: "claude-code", prompt: UNRELATED_PROMPT, cfg, client, cacheFile });
+    await call(); // turn 1
+    const t2 = await call(); // cadence turn, roster unchanged -> suppressed (the ~527-token dedup)
     expect(t2.context ?? "").not.toContain("hindsight_knowledge_refresh");
-    // The roster changes at the next STALE refetch (turn 3); emission lands on the next
-    // cadence turn (turn 4) — fetch staleness and emission share the cadence, offset by one.
-    client.listPages.mockResolvedValue({
+    // Roster changes at the next STALE refetch (turn 3); emission lands on turn 4 — fetch
+    // staleness and emission share the cadence, offset by one.
+    (client.listPages as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [
         { id: "p1", name: "Uploader guide" },
         { id: "p2", name: "Deploy runbook", description: "Order of operations for a release" },
       ],
     });
     const t3 = await call();
-    expect(t3.context ?? "").not.toContain("hindsight_knowledge_refresh"); // not a cadence turn
+    expect(t3.context ?? "").not.toContain("hindsight_knowledge_refresh");
     const t4 = await call();
     expect(t4.context).toContain("<hindsight_knowledge_refresh>");
     expect(t4.context).toContain("Deploy runbook (p2) — Order of operations for a release");
-    // reflect block is NOT re-injected on cadence turns (injected once, on the reflect turn)
+    expect(t4.context).not.toContain("hindsight_capture_initiative"); // compact reminder this time
     expect(t4.context).not.toContain("REFLECT_ANSWER");
+  });
+
+  it("isTrivialPrompt: imperative gate is length-capped; real goals pass", () => {
+    expect(isTrivialPrompt("Reply with exactly: migration-verified")).toBe(true);
+    expect(isTrivialPrompt("say hello")).toBe(true);
+    expect(isTrivialPrompt("Output a summary of what changed in the last release")).toBe(false);
+    expect(isTrivialPrompt("Print statements are spamming prod logs, find where")).toBe(false);
+    expect(isTrivialPrompt("fix the tests")).toBe(false);
   });
 
   it("defers reflect on a trivial/imperative prompt; the next substantive prompt still reflects", async () => {
@@ -340,7 +386,7 @@ describe("buildHookOutput", () => {
       client,
       cacheFile,
     });
-    expect(client.reflect).not.toHaveBeenCalled();
+    expect(client.reflectWithProvenance).not.toHaveBeenCalled();
     expect(t1.context ?? "").not.toContain("<hindsight_memory>");
     // Nothing was cached: the once-per-session synthesis is deferred, not consumed.
     const t2 = await buildHookOutput({
@@ -350,7 +396,7 @@ describe("buildHookOutput", () => {
       client,
       cacheFile,
     });
-    expect(client.reflect).toHaveBeenCalledTimes(1);
+    expect(client.reflectWithProvenance).toHaveBeenCalledTimes(1);
     expect(t2.context).toContain("REFLECT_ANSWER");
   });
 

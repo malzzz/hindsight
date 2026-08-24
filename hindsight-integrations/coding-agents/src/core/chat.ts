@@ -5,6 +5,7 @@
  */
 import { RateLimitedError, type HindsightClient } from "./hindsight";
 import { fingerprintTurns, planRetain, type RetainCursorStore } from "./retain-cursor";
+import { extractAttributionsFromTurns, recordUsed } from "./utility";
 import type { RetainStamp } from "./retain-stamp";
 import type { ChatSession } from "./types";
 import { uuidV5 } from "./uuid";
@@ -209,6 +210,19 @@ export async function retainLiveSession(
   harness?: string,
   opts: { cursors?: RetainCursorStore; stamp?: RetainStamp; retryUntil?: number } = {}
 ): Promise<void> {
+  // The flywheel's USED record: every harness's write-back flows through here,
+  // and the turns are already stripped of injected blocks (so the instruction
+  // text that TEACHES the attribution convention cannot self-match). Runs
+  // before the network write: an attribution existed whether or not the
+  // retain itself succeeds. Fail-open by construction (recordUsed never throws).
+  try {
+    const attributions = extractAttributionsFromTurns(turns);
+    if (attributions.length > 0) {
+      recordUsed({ bank: client.bank, harness, sessionId, attributions });
+    }
+  } catch {
+    /* utility accounting must never block a retain */
+  }
   const cursors = opts.cursors;
   if (!cursors)
     return writeSession(

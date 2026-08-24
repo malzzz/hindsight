@@ -28,6 +28,7 @@ import type { ClientOpts } from "./hindsight";
 import { HindsightClient } from "./hindsight";
 import { brandWord } from "./brand";
 import { buildReflectQuery, buildSystemInjection, isTrivialPrompt } from "./inject";
+import { recordInjected } from "./utility";
 import type { PageRef } from "./knowledge-injection";
 import { buildRosterRefresh, parsePageList, rosterHash } from "./knowledge-injection";
 import {
@@ -59,7 +60,14 @@ export interface HookSpec {
 
 /** Minimal client shape `buildHookOutput` needs — `HindsightClient` satisfies it structurally. */
 interface HookClient {
-  reflect(query: string, opts: { budget?: string; timeoutMs: number; maxTokens?: number }): Promise<string>;
+  reflectWithProvenance(
+    query: string,
+    opts: { budget?: string; timeoutMs: number; maxTokens?: number }
+  ): Promise<{
+    text: string;
+    memories: { id: string | null; type?: string; textHead?: string }[];
+    mentalModelIds: string[];
+  }>;
   listPages(): Promise<unknown>;
   knowledgePagesSupported?: boolean;
 }
@@ -100,8 +108,11 @@ export async function buildHookOutput(args: {
   cfg: Config;
   client: HookClient;
   cacheFile: string;
+  /** Resolved bank + session identity for utility accounting; recording is skipped when absent */
+  bankId?: string;
+  sessionId?: string;
 }): Promise<HookOutput> {
-  const { harness, prompt, cfg, client, cacheFile } = args;
+  const { harness, prompt, cfg, client, cacheFile, bankId, sessionId } = args;
 
   const cached = readSessionCache(cacheFile);
   const turns = (cached.turns ?? 0) + 1;
@@ -130,7 +141,7 @@ export async function buildHookOutput(args: {
     reflectRanThisTurn = true;
     const t0 = Date.now();
     try {
-      reflectAnswer = await client.reflect(buildReflectQuery(prompt), {
+      const provenance = await client.reflectWithProvenance(buildReflectQuery(prompt), {
         // Automatic reflection runs inside a hard 25s hook window. Hindsight's low budget is the
         // supported default for bounded reflect calls; callers that explicitly invoke the MCP
         // tool still get the deeper high-budget path.
@@ -138,6 +149,21 @@ export async function buildHookOutput(args: {
         timeoutMs: Math.min(cfg.reflectTimeoutMs, HOOK_REFLECT_CAP_MS),
         maxTokens: HOOK_REFLECT_MAX_TOKENS,
       });
+      reflectAnswer = provenance.text;
+      // The flywheel's INJECTED record: what entered context and what it was
+      // built from (two-level discipline: provenance, never usage).
+      if (reflectAnswer && bankId !== undefined && sessionId !== undefined) {
+        recordInjected({
+          bank: bankId,
+          harness,
+          sessionId,
+          queryHead: prompt.slice(0, 120),
+          answerChars: reflectAnswer.length,
+          memories: provenance.memories,
+          mentalModelIds: provenance.mentalModelIds,
+          provenanceComplete: provenance.memories.length > 0,
+        });
+      }
       diag(harness, reflectAnswer ? "reflect_ok" : "reflect_empty", {
         ms: Date.now() - t0,
         chars: reflectAnswer.length,
@@ -183,17 +209,24 @@ export async function buildHookOutput(args: {
 
   // Refresh only when the roster CHANGED since the agent last saw it (SessionStart preamble or
   // a prior refresh). Re-injecting an unchanged roster on the bare cadence measured as ~527
-  // tokens of pure duplication per emission (2026-08-24 injection audit).
+  // tokens of pure duplication per emission (2026-08-24 injection audit). An UNKNOWN hash means
+  // the agent has verifiably seen no roster (SessionStart failed, couldn't deliver — kimi and
+  // antigravity emit {} — or predates the install): the next cadence turn EMITS, with the FULL
+  // tool guide, and only then is the hash recorded. Never mark a roster seen without sending it.
   const currentRosterHash = rosterHash(pages);
   const refreshDue = cadence > 0 && turns % cadence === 0;
-  const emitRefresh = refreshDue && cached.rosterHash !== currentRosterHash;
+  const rosterUnknown = cached.rosterHash === undefined;
+  const emitRefresh = refreshDue && (rosterUnknown || cached.rosterHash !== currentRosterHash);
 
   writeSessionCache(cacheFile, {
     turns,
     reflectAnswer,
     pages: { atTurn: stale ? turns : (cached.pages?.atTurn ?? turns), list: pages },
-    rosterHash:
-      emitRefresh || cached.rosterHash === undefined ? currentRosterHash : cached.rosterHash,
+    ...(emitRefresh
+      ? { rosterHash: currentRosterHash }
+      : cached.rosterHash !== undefined
+        ? { rosterHash: cached.rosterHash }
+        : {}),
   } satisfies SessionCache);
 
   const blocks: string[] = [];
@@ -208,7 +241,9 @@ export async function buildHookOutput(args: {
   // every turn (even a plain "yes") read as phantom research. The roster below keeps the tool
   // and the page names in front of the agent.
   if (emitRefresh) {
-    blocks.push(buildRosterRefresh(pages, { reflectOnNewGoals: !cfg.autoReflect }));
+    blocks.push(
+      buildRosterRefresh(pages, { reflectOnNewGoals: !cfg.autoReflect, fullGuide: rosterUnknown })
+    );
   }
   const kept = blocks.filter(Boolean);
 
@@ -289,7 +324,15 @@ export async function runHook(
     startBackgroundSeed(cwd, { limit: cfg.seedLimit, harness: spec.harness });
   }
 
-  const output = await buildHookOutput({ harness: spec.harness, prompt, cfg, client, cacheFile });
+  const output = await buildHookOutput({
+    harness: spec.harness,
+    prompt,
+    cfg,
+    client,
+    cacheFile,
+    bankId,
+    sessionId,
+  });
   // Mid-session heal: a bank with ZERO pages means the engine never built it (e.g. the session
   // predates the install, so no SessionStart and the first-prompt net already passed). Fire the
   // idempotent engine — the per-bank lock makes repeats free while it builds.
