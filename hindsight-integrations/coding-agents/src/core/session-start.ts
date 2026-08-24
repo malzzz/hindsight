@@ -31,7 +31,7 @@ import { deriveBankId } from "./bank";
 import { brandWord } from "./brand";
 import { diag } from "./diag";
 import { setLogLevel } from "./log";
-import { parsePageList, buildKnowledgePreamble, type PageRef } from "./knowledge-injection";
+import { parsePageList, buildKnowledgePreamble, rosterHash, type PageRef } from "./knowledge-injection";
 import type { ClientOpts, RetainOpts } from "./hindsight";
 import { buildRetainStamp } from "./retain-stamp";
 import { HindsightClient } from "./hindsight";
@@ -119,6 +119,9 @@ export interface SessionStartOutput {
   additionalContext?: string;
   /** Internal lifecycle signal: defer one auto-reflect while a new bank gains useful content. */
   deferInitialReflect?: boolean;
+  /** rosterHash() of the roster shown in the preamble — seeds the session cache so the periodic
+   *  refresh knows what the agent already saw and skips unchanged rosters. */
+  rosterHash?: string;
 }
 
 /** Host-specific adapter for the shared SessionStart core. Claude and Codex use the
@@ -322,7 +325,12 @@ export async function buildSessionStartContext(args: {
   // ALWAYS record the session start (warm sessions used to log nothing — undebuggable).
   diag(harness, "session_start", { bank: bankId, cold, pages: pages.length, ms: Date.now() - t0 });
 
-  return { systemMessage, additionalContext, deferInitialReflect };
+  return {
+    systemMessage,
+    additionalContext,
+    deferInitialReflect,
+    ...(pageListKnown ? { rosterHash: rosterHash(pages) } : {}),
+  };
 }
 
 /** Run one SessionStart hook invocation: stdin event in, (maybe) an additionalContext object on stdout. */
@@ -373,8 +381,11 @@ export async function runSessionStartHook(
     });
 
     const out = await buildSessionStartContext({ cwd, sessionRoot, bankId, cfg, client, harness });
-    if (out.deferInitialReflect && sessionId) {
-      writeSessionCache(sessionCacheFile(harness, sessionId), { deferInitialReflect: true });
+    if (sessionId && (out.deferInitialReflect || out.rosterHash !== undefined)) {
+      writeSessionCache(sessionCacheFile(harness, sessionId), {
+        ...(out.deferInitialReflect ? { deferInitialReflect: true } : {}),
+        ...(out.rosterHash !== undefined ? { rosterHash: out.rosterHash } : {}),
+      });
     }
     // The lifecycle computes one host-neutral output; the registry owns each host's wire schema.
     const payload = spec.emit(out);

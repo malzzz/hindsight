@@ -188,14 +188,15 @@ describe("buildHookOutput", () => {
     const client = makeClient();
     await buildHookOutput({
       harness: "claude-code",
-      prompt: "the prompt",
+      prompt: "investigate the flaky uploader test failures",
       cfg,
       client,
       cacheFile,
     });
-    expect(client.reflect).toHaveBeenCalledWith(buildReflectQuery("the prompt"), {
+    expect(client.reflect).toHaveBeenCalledWith(buildReflectQuery("investigate the flaky uploader test failures"), {
       budget: "low",
       timeoutMs: 25000,
+      maxTokens: 1200,
     });
   });
 
@@ -204,14 +205,15 @@ describe("buildHookOutput", () => {
     const client = makeClient();
     await buildHookOutput({
       harness: "claude-code",
-      prompt: "the prompt",
+      prompt: "investigate the flaky uploader test failures",
       cfg,
       client,
       cacheFile,
     });
-    expect(client.reflect).toHaveBeenCalledWith(buildReflectQuery("the prompt"), {
+    expect(client.reflect).toHaveBeenCalledWith(buildReflectQuery("investigate the flaky uploader test failures"), {
       budget: "low",
       timeoutMs: 5000,
+      maxTokens: 1200,
     });
   });
 
@@ -228,6 +230,8 @@ describe("buildHookOutput", () => {
     expect(client.reflect).not.toHaveBeenCalled();
     expect(out.context ?? "").not.toContain("<hindsight_memory>");
     // Tool-only mode's pull trigger: the roster refresh must carry the pages-first rule.
+    // Since 2026-08-24 the refresh is roster-delta gated, so the roster must change first.
+    client.listPages.mockResolvedValue({ items: [{ id: "p9", name: "New page" }] });
     const cfg2 = resolveConfig({ autoReflect: false, pageRefreshEveryTurns: 1 });
     const out2 = await buildHookOutput({
       harness: "claude-code",
@@ -297,19 +301,48 @@ describe("buildHookOutput", () => {
     expect(result.context).not.toContain("hindsight_read_knowledge_page");
   });
 
-  it("injects the page-roster refresh only on cadence turns", async () => {
+  it("injects the roster refresh on cadence turns ONLY when the roster changed", async () => {
     const cfg = resolveConfig({ pageRefreshEveryTurns: 2 });
     const client = makeClient();
-    // turn 1: not a multiple of 2 -> no refresh
+    const call = (prompt: string = UNRELATED_PROMPT) =>
+      buildHookOutput({ harness: "claude-code", prompt, cfg, client, cacheFile });
+
+    const t1 = await call(); // fetches the roster, seeds its hash
+    expect(t1.context ?? "").not.toContain("hindsight_knowledge_refresh");
+    // turn 2 is a cadence turn but the roster is unchanged — suppressed (the whole point:
+    // an unchanged roster re-injected on the bare cadence measured ~527 duplicate tokens).
+    const t2 = await call();
+    expect(t2.context ?? "").not.toContain("hindsight_knowledge_refresh");
+    // The roster changes at the next STALE refetch (turn 3); emission lands on the next
+    // cadence turn (turn 4) — fetch staleness and emission share the cadence, offset by one.
+    client.listPages.mockResolvedValue({
+      items: [
+        { id: "p1", name: "Uploader guide" },
+        { id: "p2", name: "Deploy runbook", description: "Order of operations for a release" },
+      ],
+    });
+    const t3 = await call();
+    expect(t3.context ?? "").not.toContain("hindsight_knowledge_refresh"); // not a cadence turn
+    const t4 = await call();
+    expect(t4.context).toContain("<hindsight_knowledge_refresh>");
+    expect(t4.context).toContain("Deploy runbook (p2) — Order of operations for a release");
+    // reflect block is NOT re-injected on cadence turns (injected once, on the reflect turn)
+    expect(t4.context).not.toContain("REFLECT_ANSWER");
+  });
+
+  it("defers reflect on a trivial/imperative prompt; the next substantive prompt still reflects", async () => {
+    const cfg = resolveConfig({});
+    const client = makeClient();
     const t1 = await buildHookOutput({
       harness: "claude-code",
-      prompt: UNRELATED_PROMPT,
+      prompt: "Reply with exactly: migration-verified",
       cfg,
       client,
       cacheFile,
     });
-    expect(t1.context).not.toContain("hindsight_knowledge_refresh");
-    // turn 2: multiple of 2 -> refresh injected, listing the page roster
+    expect(client.reflect).not.toHaveBeenCalled();
+    expect(t1.context ?? "").not.toContain("<hindsight_memory>");
+    // Nothing was cached: the once-per-session synthesis is deferred, not consumed.
     const t2 = await buildHookOutput({
       harness: "claude-code",
       prompt: UNRELATED_PROMPT,
@@ -317,10 +350,8 @@ describe("buildHookOutput", () => {
       client,
       cacheFile,
     });
-    expect(t2.context).toContain("<hindsight_knowledge_refresh>");
-    expect(t2.context).toContain("Uploader guide (p1)");
-    // reflect block is NOT re-injected on cadence turns (injected once, on the reflect turn)
-    expect(t2.context).not.toContain("REFLECT_ANSWER");
+    expect(client.reflect).toHaveBeenCalledTimes(1);
+    expect(t2.context).toContain("REFLECT_ANSWER");
   });
 
   it("listPages rejection: no throw, reflect block still returned, turn still counted", async () => {

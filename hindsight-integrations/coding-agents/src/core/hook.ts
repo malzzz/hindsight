@@ -27,9 +27,9 @@ import { startBackgroundSeed } from "./seed";
 import type { ClientOpts } from "./hindsight";
 import { HindsightClient } from "./hindsight";
 import { brandWord } from "./brand";
-import { buildReflectQuery, buildSystemInjection } from "./inject";
+import { buildReflectQuery, buildSystemInjection, isTrivialPrompt } from "./inject";
 import type { PageRef } from "./knowledge-injection";
-import { buildRosterRefresh, parsePageList } from "./knowledge-injection";
+import { buildRosterRefresh, parsePageList, rosterHash } from "./knowledge-injection";
 import {
   readSessionCache,
   sessionCacheFile,
@@ -59,7 +59,7 @@ export interface HookSpec {
 
 /** Minimal client shape `buildHookOutput` needs — `HindsightClient` satisfies it structurally. */
 interface HookClient {
-  reflect(query: string, opts: { budget?: string; timeoutMs: number }): Promise<string>;
+  reflect(query: string, opts: { budget?: string; timeoutMs: number; maxTokens?: number }): Promise<string>;
   listPages(): Promise<unknown>;
   knowledgePagesSupported?: boolean;
 }
@@ -72,6 +72,14 @@ interface HookClient {
  * Raise the harness timeout in lockstep if you raise this.
  */
 const HOOK_REFLECT_CAP_MS = 25_000;
+
+/**
+ * Cap on the injected synthesis. The server's 4096-token default is only softly enforced on the
+ * forced-synthesis path (prompt directive + a post-hoc rewrite that skips it), and the 2026-08-24
+ * audit observed 61 -> 8,032-char variance with no knob controlling it. ~1200 tokens leaves room
+ * for a table-bearing answer while halving the observed worst case.
+ */
+const HOOK_REFLECT_MAX_TOKENS = 1200;
 
 export interface HookOutput {
   /** The model-facing injection block, or undefined when there's nothing to inject. */
@@ -112,6 +120,12 @@ export async function buildHookOutput(args: {
     // A new bank has no useful history yet. Do not burn the once-per-session synthesis on prompt
     // one; this marker is deliberately consumed below so prompt two remains eligible to reflect.
     diag(harness, "reflect_deferred_new_bank", { query: prompt.slice(0, 80) });
+  } else if (cfg.autoReflect && reflectAnswer === undefined && isTrivialPrompt(prompt)) {
+    // Trivial/imperative prompt ("Reply with exactly: …", bare acknowledgements): recalled
+    // history cannot help, and the audit showed reflect answering them with kilobytes of
+    // unrelated tables. DEFER, don't consume: nothing is cached, so the next substantive
+    // prompt still gets the once-per-session synthesis.
+    diag(harness, "reflect_deferred_trivial_prompt", { query: prompt.slice(0, 80) });
   } else if (cfg.autoReflect && reflectAnswer === undefined) {
     reflectRanThisTurn = true;
     const t0 = Date.now();
@@ -122,6 +136,7 @@ export async function buildHookOutput(args: {
         // tool still get the deeper high-budget path.
         budget: "low",
         timeoutMs: Math.min(cfg.reflectTimeoutMs, HOOK_REFLECT_CAP_MS),
+        maxTokens: HOOK_REFLECT_MAX_TOKENS,
       });
       diag(harness, reflectAnswer ? "reflect_ok" : "reflect_empty", {
         ms: Date.now() - t0,
@@ -166,10 +181,19 @@ export async function buildHookOutput(args: {
     }
   }
 
+  // Refresh only when the roster CHANGED since the agent last saw it (SessionStart preamble or
+  // a prior refresh). Re-injecting an unchanged roster on the bare cadence measured as ~527
+  // tokens of pure duplication per emission (2026-08-24 injection audit).
+  const currentRosterHash = rosterHash(pages);
+  const refreshDue = cadence > 0 && turns % cadence === 0;
+  const emitRefresh = refreshDue && cached.rosterHash !== currentRosterHash;
+
   writeSessionCache(cacheFile, {
     turns,
     reflectAnswer,
     pages: { atTurn: stale ? turns : (cached.pages?.atTurn ?? turns), list: pages },
+    rosterHash:
+      emitRefresh || cached.rosterHash === undefined ? currentRosterHash : cached.rosterHash,
   } satisfies SessionCache);
 
   const blocks: string[] = [];
@@ -183,7 +207,7 @@ export async function buildHookOutput(args: {
   // hindsight_search_knowledge_pages when a question warrants it — an unprompted injection on
   // every turn (even a plain "yes") read as phantom research. The roster below keeps the tool
   // and the page names in front of the agent.
-  if (cadence > 0 && turns % cadence === 0) {
+  if (emitRefresh) {
     blocks.push(buildRosterRefresh(pages, { reflectOnNewGoals: !cfg.autoReflect }));
   }
   const kept = blocks.filter(Boolean);

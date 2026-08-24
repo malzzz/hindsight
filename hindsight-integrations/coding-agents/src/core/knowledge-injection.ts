@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
+
 export interface PageRef {
   id: string;
   title: string;
+  /** One-line summary from the knowledge-base node — the field that makes a roster entry
+   *  SELECTABLE (a bare title + opaque kp-… id forces the agent to guess which page to read). */
+  description?: string;
 }
 
 /** Defensive parse of HindsightClient.listPages() ({items:[{id,name}]}, flattened from the
@@ -13,13 +18,33 @@ export function parsePageList(raw: unknown): PageRef[] {
   for (const it of items) {
     const id = (it as { id?: unknown })?.id;
     const name = (it as { name?: unknown })?.name;
-    if (typeof id === "string" && typeof name === "string") out.push({ id, title: name });
+    const description = (it as { description?: unknown })?.description;
+    if (typeof id === "string" && typeof name === "string") {
+      out.push({
+        id,
+        title: name,
+        ...(typeof description === "string" && description.trim() ? { description } : {}),
+      });
+    }
   }
   return out;
 }
 
+/** Identity of a roster as the agent would see it — gates the periodic refresh so an
+ *  unchanged roster is never re-injected (each redundant refresh measured ~527 tokens). */
+export function rosterHash(pages: PageRef[]): string {
+  const key = pages.map((p) => `${p.id}\u0000${p.title}\u0000${p.description ?? ""}`).join("\n");
+  return createHash("sha256").update(key).digest("hex").slice(0, 16);
+}
+
 function roster(pages: PageRef[]): string {
-  return pages.map((p) => `- ${p.title} (${p.id})`).join("\n");
+  return pages
+    .map((p) => {
+      const desc = p.description?.replace(/\s+/g, " ").trim();
+      const clipped = desc && desc.length > 100 ? `${desc.slice(0, 100)}…` : desc;
+      return `- ${p.title} (${p.id})${clipped ? ` — ${clipped}` : ""}`;
+    })
+    .join("\n");
 }
 
 /**
@@ -88,20 +113,25 @@ export function buildKnowledgePreamble(pages: PageRef[], opts?: ToolGuideOpts): 
 }
 
 /**
- * Periodic UserPromptSubmit refresh. ALWAYS emits (never undefined) so the full tool guide keeps
- * re-appearing in context even on a fresh repo with no pages yet — precisely when the agent is
- * building its first features. The page roster is included only when pages exist; the reminder of
- * which tools exist and WHEN to call each is unconditional.
+ * Periodic UserPromptSubmit refresh. Since 2026-08-24 this is ROSTER-DELTA ONLY: the hook emits
+ * it solely when rosterHash() changed since the agent last saw the roster (SessionStart preamble
+ * or a prior refresh), and it carries a one-line tool reminder instead of the full TOOL_GUIDE —
+ * the injection audit measured the guide re-injected verbatim every 10 turns (~1,684 chars of
+ * pure duplication per emission; a 30-turn session paid ~1,700 duplicate tokens). The full guide
+ * ships once, at SessionStart.
  */
 export function buildRosterRefresh(pages: PageRef[], opts?: ToolGuideOpts): string {
   const rosterBlock = pages.length
-    ? `Current Hindsight knowledge pages (may have changed):\n${roster(pages)}\n`
+    ? `Knowledge pages changed — current list:\n${roster(pages)}\n`
     : "";
   return (
     "<hindsight_knowledge_refresh>\n" +
     rosterBlock +
-    "Reminder — this repo's Hindsight tools are available; call them at the right moments:\n" +
-    `${toolGuide(opts)}\n` +
+    (opts?.reflectOnNewGoals ? PAGES_FIRST_ON_GOALS : "") +
+    "Reminder: the Hindsight tools introduced at session start are still available — " +
+    "hindsight_search_knowledge_pages remains the first stop for anything this project's " +
+    "accumulated knowledge might answer; the full when-to-call guide from session start is " +
+    "unchanged.\n" +
     "</hindsight_knowledge_refresh>"
   );
 }

@@ -32,6 +32,30 @@ export function buildReflectQuery(prompt: string): string {
   );
 }
 
+/**
+ * Gate for the once-per-session automatic reflect. The 2026-08-24 injection audit measured
+ * reflect firing on EVERY session's first prompt with 61 -> 8,032-char output variance —
+ * "Reply with exactly: migration-verified" received 8KB of unrelated migration tables in front
+ * of a prompt that wanted one word back. Deliberately narrow: only prompts that clearly cannot
+ * benefit from recalled history. A gated prompt DEFERS reflect (nothing is cached), so the next
+ * substantive prompt still gets the synthesis — a false positive costs a one-prompt delay,
+ * never the session's synthesis.
+ */
+export function isTrivialPrompt(prompt: string): boolean {
+  const p = prompt.trim();
+  // Only near-empty prompts are gated on length alone: a short-but-real goal ("fix the tests")
+  // is exactly the kind of prompt the bank may know something about.
+  if (p.length < 12) return true;
+  if (/^(reply with|say|echo|print|type|output|respond with)\b/i.test(p)) return true;
+  if (
+    p.length < 48 &&
+    /^(yes|no|ok|okay|sure|thanks|thank you|continue|go ahead|do it|proceed|lgtm|sounds good)\b/i.test(p)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function buildSystemInjection(memory: string): string {
   // The <hindsight_memory> wrapper is LOAD-BEARING: the transcript readers strip this exact tag
   // (transcript-util MEMORY_TAG_RE) so the session write-back never re-ingests the injected

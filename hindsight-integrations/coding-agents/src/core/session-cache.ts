@@ -13,6 +13,9 @@ export interface SessionCache {
   /** SessionStart saw a new/empty bank; consume this on prompt one, then allow reflect. */
   deferInitialReflect?: boolean;
   pages?: { atTurn: number; list: PageRef[] };
+  /** rosterHash() of the last roster the agent SAW (SessionStart preamble or a refresh) —
+   *  the periodic refresh is emitted only when the current roster differs. */
+  rosterHash?: string;
 }
 
 export function sessionCacheFile(harness: string, sessionId: string): string {
