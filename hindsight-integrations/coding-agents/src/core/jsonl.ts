@@ -63,7 +63,7 @@ export function readJsonlTail(path: string, opts: { scope: string; maxBytes?: nu
       skippedBytes,
     });
   }
-  return { lines: streamLines(path, skippedBytes), skippedBytes };
+  return { lines: streamLines(path, skippedBytes, opts.scope), skippedBytes };
 }
 
 function* emptyLines(): Generator<string> {
@@ -72,7 +72,7 @@ function* emptyLines(): Generator<string> {
 
 /** Yield complete lines from `start` to EOF. The fd is opened lazily (on first iteration) and
  *  closed even if the consumer abandons the generator early — for..of calls return() for us. */
-function* streamLines(path: string, start: number): Generator<string> {
+function* streamLines(path: string, start: number, scope = "jsonl"): Generator<string> {
   let fd: number;
   try {
     fd = openSync(path, "r");
@@ -92,7 +92,24 @@ function* streamLines(path: string, start: number): Generator<string> {
     let dropPartial = start > 0;
 
     for (;;) {
-      const bytesRead = readSync(fd, buffer, 0, buffer.length, position);
+      // The fail-open contract has to cover the LAZY read, not just the open. `openSync` succeeds
+      // on a DIRECTORY (and on a file whose permissions or backing store fail later), and this
+      // generator is consumed by the caller AFTER the reader returned — so a throw here escapes
+      // every guard the reader placed around the call. In the retain path that means
+      // `buildRetain` calls the reader at retain-hook.ts before its own try, so an uncaught read
+      // fault rejects the whole Stop hook and the turn is never retained: total loss, not partial.
+      // Yield what was parsed and stop, exactly as an unreadable file already does.
+      let bytesRead: number;
+      try {
+        bytesRead = readSync(fd, buffer, 0, buffer.length, position);
+      } catch (err) {
+        log.warn(scope, "transcript read failed — keeping the records already parsed", {
+          path,
+          bytesConsumed: position - (start > 0 ? start - 1 : 0),
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
       if (bytesRead <= 0) break;
       position += bytesRead;
       pending += decoder.write(buffer.subarray(0, bytesRead));

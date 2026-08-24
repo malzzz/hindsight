@@ -108,3 +108,21 @@ describe("readJsonlTail", () => {
     expect(MAX_TRANSCRIPT_BYTES).toBe(32 * 1024 * 1024);
   });
 });
+
+describe("fail-open covers the lazy read, not just the open", () => {
+  // openSync SUCCEEDS on a directory; the fault surfaces on the first readSync, which happens
+  // when the CONSUMER iterates — after readJsonlTail has already returned. Before this guard the
+  // throw escaped every reader and, in the retain path, rejected the whole Stop hook.
+  it("yields nothing instead of throwing when the path is a directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "jsonl-eisdir-"));
+    const tail = readJsonlTail(dir, { scope: "test" });
+    expect(() => [...tail.lines]).not.toThrow();
+    expect([...readJsonlTail(dir, { scope: "test" }).lines]).toEqual([]);
+  });
+
+  it("still fails open for a path that does not exist (the case already covered)", () => {
+    expect([...readJsonlTail(join(tmpdir(), "no-such-file.jsonl"), { scope: "test" }).lines]).toEqual(
+      []
+    );
+  });
+});
