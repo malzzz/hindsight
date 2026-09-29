@@ -198,22 +198,9 @@ describe("claude-code installer", () => {
 });
 
 describe("kimi-code installer", () => {
+  // Parsed as real TOML, so a malformed block fails here rather than in the user's CLI.
   const hookEntries = (toml: string) =>
-    toml
-      .split(/^\[\[hooks\]\]$/m)
-      .slice(1)
-      .map((chunk) =>
-        Object.fromEntries(
-          chunk
-            .split("\n")
-            .map((l) => l.trim())
-            .filter((l) => l && !l.startsWith("#") && !l.startsWith("["))
-            .map((l) => {
-              const i = l.indexOf("=");
-              return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
-            })
-        )
-      );
+    (parseToml(toml).hooks as Record<string, unknown>[] | undefined) ?? [];
 
   it("emits ONLY event/command/timeout on every entry", () => {
     // The load-bearing invariant. Kimi validates [[hooks]] against a strict 4-key schema, and an
@@ -222,7 +209,7 @@ describe("kimi-code installer", () => {
     const ctx = makeCtx();
     expect(run(["install", "kimi-code"], ctx)).toBe(0);
     const toml = readFileSync(join(ctx.home, ".kimi-code", "config.toml"), "utf8");
-    const ours = toml.slice(toml.indexOf("HINDSIGHT_CODING_AGENTS_KIMI_START"));
+    const ours = toml.slice(toml.indexOf("# HINDSIGHT_CODING_AGENTS_KIMI_START"));
     const entries = hookEntries(ours);
     expect(entries).toHaveLength(3);
     for (const e of entries) {
@@ -236,8 +223,8 @@ describe("kimi-code installer", () => {
     const ctx = makeCtx();
     expect(run(["install", "kimi-code"], ctx)).toBe(0);
     const toml = readFileSync(join(ctx.home, ".kimi-code", "config.toml"), "utf8");
-    const ours = toml.slice(toml.indexOf("HINDSIGHT_CODING_AGENTS_KIMI_START"));
-    const got = hookEntries(ours).map((e) => [JSON.parse(e.event), Number(e.timeout)]);
+    const ours = toml.slice(toml.indexOf("# HINDSIGHT_CODING_AGENTS_KIMI_START"));
+    const got = hookEntries(ours).map((e) => [e.event, e.timeout]);
     const want = Object.values(HOOK_HARNESSES["kimi-code"].install).map((h) => [
       h.event,
       h.timeout,
@@ -260,9 +247,9 @@ describe("kimi-code installer", () => {
   });
 
   it("registers a stdio MCP server that needs no bearer-token env var", () => {
-    // The http entry this replaces referenced HINDSIGHT_API_KEY, which is not exported into
-    // Kimi's environment — so it 401s and the tools never appear. The packaged stdio server
-    // reads endpoint and token from ~/.hindsight/coding-agent.json instead.
+    // A hand-written http entry needs HINDSIGHT_API_KEY exported into Kimi's environment, or it
+    // 401s and the tools never appear. Ours is the packaged stdio server, which reads endpoint and
+    // token from ~/.hindsight/coding-agent.json — and it overwrites such an entry.
     const ctx = makeCtx();
     const mcpPath = join(ctx.home, ".kimi-code", "mcp.json");
     mkdirSync(dirname(mcpPath), { recursive: true });
@@ -282,6 +269,22 @@ describe("kimi-code installer", () => {
     expect(mcp.mcpServers.hindsight.env.HINDSIGHT_MCP_HARNESS).toBe("kimi-code");
     expect(mcp.mcpServers.hindsight.bearerTokenEnvVar).toBeUndefined();
     expect(mcp.mcpServers.hindsight.url).toBeUndefined();
+  });
+
+  it("honours KIMI_CODE_HOME, where the CLI and the transcript reader both look", () => {
+    const ctx = makeCtx();
+    const kimiHome = join(ctx.home, "custom-kimi");
+    const original = process.env.KIMI_CODE_HOME;
+    process.env.KIMI_CODE_HOME = kimiHome;
+    try {
+      expect(run(["install", "kimi-code"], ctx)).toBe(0);
+      expect(hookEntries(readFileSync(join(kimiHome, "config.toml"), "utf8"))).toHaveLength(3);
+      expect(existsSync(join(kimiHome, "mcp.json"))).toBe(true);
+      expect(existsSync(join(ctx.home, ".kimi-code", "config.toml"))).toBe(false);
+    } finally {
+      if (original === undefined) delete process.env.KIMI_CODE_HOME;
+      else process.env.KIMI_CODE_HOME = original;
+    }
   });
 
   it("uninstall removes our block, our MCP entry, and nothing else", () => {

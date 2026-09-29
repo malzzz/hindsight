@@ -177,6 +177,12 @@ npx @vectorize-io/hindsight-coding-agents install qwen-code
 
 Native hooks in `~/.qwen/settings.json`, plus MCP and the companion skill.
 
+> Qwen's hook `timeout` is in **milliseconds** (its own docs: "Timeout in milliseconds, default
+> 60000"), unlike every other supported agent, so the installed values are `30000/30000/60000`.
+> Recall fires on genuine submissions only — `UserPromptSubmit` also fires on tool-result
+> continuations, so interactive sessions recall once per prompt while headless (`qwen -p`),
+> `serve`, SDK and ACP sessions seed and retain but do not recall.
+
 ####  Kimi Code
 
 ```bash
@@ -184,12 +190,11 @@ npx @vectorize-io/hindsight-coding-agents install kimi-code
 ```
 
 Native hooks in `~/.kimi-code/config.toml`, plus MCP in `~/.kimi-code/mcp.json` and the companion skill.
+(Hooks and MCP go under `$KIMI_CODE_HOME` instead when it is set.)
 
-> Qwen's hook `timeout` is in **milliseconds** (its own docs: "Timeout in milliseconds, default
-> 60000"), unlike every other supported agent, so the installed values are `30000/30000/60000`.
-> Recall fires on genuine submissions only — `UserPromptSubmit` also fires on tool-result
-> continuations, so interactive sessions recall once per prompt while headless (`qwen -p`),
-> `serve`, SDK and ACP sessions seed and retain but do not recall.
+> Kimi's SessionStart hook cannot reach the model, so the session briefing is silent there;
+> recalled memory arrives on the first prompt instead, as a `<hook_result>` block. Sessions are
+> retained from every agent's `wire.jsonl` under the session directory, subagents included.
 
 ####  Factory Droid
 

@@ -17,7 +17,7 @@ import { dcodeAssistantText, readDcodeTranscript } from "../core/transcript-dcod
 import { readQwenTranscript } from "../core/transcript-qwen";
 import { readDroidTranscript } from "../core/transcript-droid";
 import { zcodeAssistantText } from "../core/transcript-zcode";
-import { kimiSessionDir, readKimiTranscript } from "../core/transcript-kimi";
+import { kimiPromptText, kimiSessionDir, readKimiTranscript } from "../core/transcript-kimi";
 
 export type HookHarnessName =
   | "claude-code"
@@ -595,7 +595,8 @@ export const HOOK_HARNESSES: Record<HookHarnessName, HookHarnessSpec> = {
     prompt: {
       harness: "kimi-code",
       parse: (ev) => ({
-        prompt: ev.prompt as string | undefined,
+        // A block array, not a string — the same shape as the wire log's `turn.prompt.input`.
+        prompt: kimiPromptText(ev.prompt),
         cwd: ev.cwd as string | undefined,
         sessionId: ev.session_id as string | undefined,
       }),

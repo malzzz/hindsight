@@ -6,7 +6,7 @@
  *   [[hooks]]
  *   event = "Stop"
  *   command = "hindsight-kimi-stop-hook"
- *   timeout = 30
+ *   timeout = 60
  * A fifth key drops EVERY hook in the file at warning severity while the CLI still boots.
  */
 import { runHarnessRetain } from "./harness/hook-lifecycle";

@@ -59,7 +59,8 @@ const HARNESS = "kimi-code";
 const SESSIONS_DIR = "sessions";
 const AGENTS_DIR = "agents";
 const WIRE_LOG = "wire.jsonl";
-/** The hook payload carries the BARE uuid; the directory (and session_index.jsonl) prefix it. */
+/** The session directory's prefix. Kimi 2.1.1's hook payloads already carry it
+ *  (`session_id: "session_<uuid>"`); a bare uuid is accepted too. */
 const SESSION_PREFIX = "session_";
 /** The session's own loop. Every other agent directory is `agent-<n>` (a subagent or a fork). */
 const MAIN_AGENT = "main";
@@ -138,9 +139,15 @@ function stampOf(event: KimiWireEvent): { timestamp?: string } {
   return Number.isNaN(at.getTime()) ? {} : { timestamp: at.toISOString() };
 }
 
-/** `turn.prompt.input` is a block array; only text blocks carry prose. */
-function promptText(input: KimiWireEvent["input"]): string {
-  return (input || [])
+/**
+ * A Kimi prompt is a block array, never a string — both `turn.prompt.input` in the wire log and
+ * `prompt` on the UserPromptSubmit hook payload (verified against @moonshot-ai/kimi-code 2.1.1:
+ * `"prompt":[{"type":"text","text":"..."}]`). Only text blocks carry prose. Takes `unknown` because
+ * the hook payload is untyped JSON: treating it as a string made the prompt hook throw on `.trim()`.
+ */
+export function kimiPromptText(input: unknown): string {
+  if (!Array.isArray(input)) return "";
+  return (input as { type?: string; text?: unknown }[])
     .filter((block) => block?.type === "text" && typeof block.text === "string")
     .map((block) => block.text as string)
     .join("\n");
@@ -173,7 +180,7 @@ export function readKimiWire(events: readonly KimiWireEvent[]): TransportTurn[] 
       flushStep();
       // Kimi drives itself through the same record: only `user` is a human — see the module doc.
       if (event.origin?.kind !== "user") continue;
-      const content = stripInjectedMemory(promptText(event.input)).trim();
+      const content = stripInjectedMemory(kimiPromptText(event.input)).trim();
       if (content) turns.push({ role: "user", content, ...stamp });
       continue;
     }

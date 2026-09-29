@@ -1432,11 +1432,20 @@ const KIMI_MARKER_START = "# HINDSIGHT_CODING_AGENTS_KIMI_START";
 const KIMI_MARKER_END = "# HINDSIGHT_CODING_AGENTS_KIMI_END";
 const KIMI_BLOCK_RE = new RegExp(`\\n?${KIMI_MARKER_START}[\\s\\S]*?${KIMI_MARKER_END}\\n?`);
 
+/**
+ * Kimi Code home — `$KIMI_CODE_HOME`, else `~/.kimi-code`, the CLI's own resolution order. The
+ * transcript reader resolves sessions the same way (core/transcript-kimi.ts); installing anywhere
+ * else would write hooks into a config.toml the CLI never loads.
+ */
+function kimiHome(c: InstallCtx): string {
+  return process.env.KIMI_CODE_HOME || join(c.home, ".kimi-code");
+}
+
 const kimi: HarnessInstaller = {
   name: "kimi-code",
-  detect: (c) => onPath("kimi") || existsSync(join(c.home, ".kimi-code")),
+  detect: (c) => onPath("kimi") || existsSync(kimiHome(c)),
   install(c) {
-    const path = join(c.home, ".kimi-code", "config.toml");
+    const path = join(kimiHome(c), "config.toml");
     const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
     // Replace a previous block rather than skipping when one exists, so a re-install repairs
     // paths that moved with the package (the grok-build precedent).
@@ -1462,9 +1471,9 @@ const kimi: HarnessInstaller = {
     writeFileSync(path, `${withoutOurs.replace(/\n*$/, "\n")}${block}`);
     // Kimi keeps MCP registration in its own mcp.json, not config.toml. Register the packaged
     // stdio server: it reads the endpoint and token from ~/.hindsight/coding-agent.json, so the
-    // entry needs no bearerTokenEnvVar — the http shape this replaces required HINDSIGHT_API_KEY
-    // to be exported into Kimi's environment, and silently 401s when it is not.
-    const mcpPath = join(c.home, ".kimi-code", "mcp.json");
+    // entry needs no bearerTokenEnvVar. An http entry would need HINDSIGHT_API_KEY exported into
+    // Kimi's environment, and silently 401s when it is not.
+    const mcpPath = join(kimiHome(c), "mcp.json");
     const mcp = readJson(mcpPath);
     mcp.mcpServers = { ...(mcp.mcpServers ?? {}), hindsight: mcpServerEntry(c.dist, "kimi-code") };
     writeJson(mcpPath, mcp);
@@ -1472,13 +1481,13 @@ const kimi: HarnessInstaller = {
     c.log?.(`kimi-code: native hooks installed in ${path}, MCP in ${mcpPath}`);
   },
   uninstall(c) {
-    const path = join(c.home, ".kimi-code", "config.toml");
+    const path = join(kimiHome(c), "config.toml");
     if (existsSync(path)) {
       const existing = readFileSync(path, "utf8");
       const cleaned = existing.replace(KIMI_BLOCK_RE, "\n");
       if (cleaned !== existing) writeFileSync(path, cleaned);
     }
-    const mcpPath = join(c.home, ".kimi-code", "mcp.json");
+    const mcpPath = join(kimiHome(c), "mcp.json");
     if (existsSync(mcpPath)) {
       const mcp = readJson(mcpPath);
       if (mcp.mcpServers?.hindsight) {
